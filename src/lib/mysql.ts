@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
-import mysql from 'mysql2/promise';
+import mysql, { Pool } from 'mysql2/promise';
+import { Condition, Field, OrderBy } from '../@types/Field';
 
 dotenv.config();
 
@@ -10,17 +11,18 @@ const MYSQL_HOST = process.env.MYSQL_HOST;
 const MYSQL_PORT = process.env.MYSQL_PORT;
 
 class MySQL {
-    #pool
+    private static instance: MySQL;
+    private pool: Pool | null = null;
 
     constructor() {
         if (!MySQL.instance) {
             try {
-                this.#pool = mysql.createPool({
+                this.pool = mysql.createPool({
                     host: MYSQL_HOST,
                     user: MYSQL_USER,
                     password: MYSQL_PASSWORD,
                     database: MYSQL_DATABASE,
-                    port: MYSQL_PORT,
+                    port: Number(MYSQL_PORT),
                 });
                 MySQL.instance = this;
             } catch (error) {
@@ -31,62 +33,71 @@ class MySQL {
         return MySQL.instance;
     }
 
-    table(tableName) {
-        return new TableQuery(tableName,this.#pool);
+    public table(tableName: string): TableQuery {
+        return new TableQuery(tableName, this.pool);
     }
 
-    async query(databaseName, sqlQuery) {
+    public async query(databaseName: string, sqlQuery: string): Promise<{ success: boolean } | { error: string }> {
         if (typeof databaseName !== 'string' || typeof sqlQuery !== 'string') {
             throw new Error('El nombre de la base de datos y la consulta deben ser cadenas de texto.');
         }
-    
-        //sqlQuery = this.#cleanSqlDump(sqlQuery);
+
         const sqlCommands = sqlQuery.split(';').filter(cmd => cmd.trim().length > 0);
-    
+
         try {
-            // Ejecutar el comando USE una sola vez al principio
-            await this.#pool.query(`USE \`${databaseName}\`;`);
-            
-            // Ejecutar los comandos SQL uno por uno
-            for (const command of sqlCommands) {
-                const query = `${command};`; // Ya incluye el punto y coma
-                await this.#pool.query(query);
-            }
+            if(this.pool){
+                // Cambiar a la base de datos especificada
+                await this.pool.query(`USE \`${databaseName}\`;`);
     
-            return { success: true };
-        } catch (error) {
-            console.error('Error al ejecutar la consulta.', error);
-            return { error: error.sqlMessage};
+                // Ejecutar cada comando SQL
+                for (const command of sqlCommands) {
+                    const query = `${command};`;
+                    await this.pool.query(query);
+                }
+    
+                return { success: true };
+            }
+            return { success: false };
+        } catch (error: any) {
+            console.error('Error al ejecutar la consulta:', error);
+            return { error: error.sqlMessage || error.message };
         }
     }
 }
 
 class TableQuery {
-    #conection;
-    #nextType; // Almacenar el tipo para la próxima condición
-    #joins; // Almacenar los JOINs
-    #orderBy; // Almacenar los ORDER BY
-    #distinct;
-    #groupBy; // Almacenar los GROUP BY
+    private conection: Pool | null; // Tipo de conexión, puedes reemplazar `any` con el tipo adecuado
+    private nextType: string; // Almacenar el tipo para la próxima condición
+    private joins: string[]; // Almacenar los JOINs
+    private _orderBy: OrderBy[]; // Almacenar los ORDER BY
+    private _distinct: boolean; // Para controlar si se utiliza DISTINCT
+    private _groupBy: string[]; // Almacenar los GROUP BY
+    private tableName: string; // Nombre de la tabla
+    private fields: string[]; // Campos seleccionados
+    private query: string; // Consulta SQL construida
+    private conditions: Condition[]; // Condiciones WHERE
+    private limitValue: number | null = null; // Límite de resultados
+    private pageValue: number | null = null; // Límite de resultados
 
-    constructor(tableName, conection=null) {
+
+    constructor(tableName: string, conection: Pool | null = null) {
         this.tableName = tableName;
         this.fields = [];
-        this.#nextType = 'AND'; 
-        this.#joins = []; // Inicializar JOINs
-        this.query = `SELECT * FROM \`${tableName}\``; // Consulta básica
-        this.conditions = []; // Para almacenar las condiciones WHERE
-        this.#distinct = false; // Inicialmente no usar DISTINCT
-        this.#orderBy = []; // Inicializar ORDER BY
-        this.#groupBy = []; // Inicializar GROUP BY
-        this.#conection = conection; // Inicializar GROUP BY
+        this.nextType = 'AND';
+        this.joins = [];
+        this.query = `SELECT * FROM \`${tableName}\``;
+        this.conditions = [];
+        this._distinct = false;
+        this._orderBy = [];
+        this._groupBy = [];
+        this.conection = conection;
     }
 
     columns(){
-        return new Columns(this.tableName, this.#conection);
+        return new Columns(this.tableName, this.conection);
     }
     
-    async create(fields) {
+    async create(fields: Field[]) {
         try {
             const fieldsDefinition = fields.map(field => {
                 const { key, type, defaultValue, length, options, foreing } = field;
@@ -143,7 +154,7 @@ class TableQuery {
             const sqlQuery = `DROP TABLE IF EXISTS \`${this.tableName}\``;
             await this.#get_response(sqlQuery);
             return true;
-        } catch (error) {
+        } catch (error:any) {
             throw new Error('Error al eliminar la tabla: ' + error.message);
         }
     }
@@ -151,66 +162,66 @@ class TableQuery {
 
     select(fields = []) {
         if (fields.length > 0) {
-            this.query = `SELECT ${this.#distinct ? 'DISTINCT ' : ''}${fields.join(', ')} FROM \`${this.tableName}\``;
+            this.query = `SELECT ${this._distinct ? 'DISTINCT ' : ''}${fields.join(', ')} FROM \`${this.tableName}\``;
         }
         return this;
     }
 
-    where(column, operator, value) {
-        this.conditions.push({ column, operator, value, type: this.#nextType, isGroup: false });
-        this.#nextType = 'AND'; // Reiniciar el tipo después de agregar una condición
+    where(column: string, operator: string, value: any) {
+        this.conditions.push({ column, operator, value, type: this.nextType, isGroup: false });
+        this.nextType = 'AND'; // Reiniciar el tipo después de agregar una condición
         return this;
     }
 
-    orWhere(column, operator, value) {
+    orWhere(column: string, operator: string, value: any) {
         this.conditions.push({ column, operator, value, type: 'OR', isGroup: false });
         return this;
     }
 
-    whereGroup(callback) {
+    whereGroup(callback:any) {
         const groupQuery = new TableQuery(this.tableName);
         callback(groupQuery);
         const groupConditions = groupQuery.buildConditions(); // Construir solo las condiciones sin SELECT ni WHERE
-        this.conditions.push({ query: groupConditions, type: this.#nextType, isGroup: true });
-        this.#nextType = 'AND'; // Reiniciar el tipo después de agregar un grupo
+        this.conditions.push({ query: groupConditions, type: this.nextType, isGroup: true });
+        this.nextType = 'AND'; // Reiniciar el tipo después de agregar un grupo
         return this;
     }
     
     or() {
-        this.#nextType = 'OR';
+        this.nextType = 'OR';
         return this;
     }
 
     and() {
-        this.#nextType = 'AND';
+        this.nextType = 'AND';
         return this;
     }
 
-    whereBetween(column, [value1, value2]) {
+    whereBetween(column:string, [value1, value2]:any) {
         if (Array.isArray([value1, value2]) && value1 !== undefined && value2 !== undefined) {
-            this.conditions.push({ column, operator: 'BETWEEN', value: [value1, value2], type: this.#nextType, isGroup: false });
-            this.#nextType = 'AND'; // Reiniciar el tipo después de agregar una condición
+            this.conditions.push({ column, operator: 'BETWEEN', value: [value1, value2], type: this.nextType, isGroup: false });
+            this.nextType = 'AND'; // Reiniciar el tipo después de agregar una condición
         }
         return this;
     }
 
-    whereIn(column, values) {
+    whereIn(column:string, values:any) {
         if (Array.isArray(values) && values.length > 0) {
-            this.conditions.push({ column, operator: 'IN', value: values, type: this.#nextType, isGroup: false });
-            this.#nextType = 'AND'; // Reiniciar el tipo después de agregar una condición
+            this.conditions.push({ column, operator: 'IN', value: values, type: this.nextType, isGroup: false });
+            this.nextType = 'AND'; // Reiniciar el tipo después de agregar una condición
         }
         return this;
     }
 
-    whereNull(column) {
-        this.conditions.push({ column, operator: 'IS NULL', type: this.#nextType, isGroup: false });
-        this.#nextType = 'AND'; // Reiniciar el tipo después de agregar una condición
+    whereNull(column:string) {
+        this.conditions.push({ column, operator: 'IS NULL', type: this.nextType, isGroup: false });
+        this.nextType = 'AND'; // Reiniciar el tipo después de agregar una condición
         return this;
     }
 
-    whereNotNull(column) {
-        this.conditions.push({ column, operator: 'IS NOT NULL', type: this.#nextType, isGroup: false });
-        this.#nextType = 'AND'; // Reiniciar el tipo después de agregar una condición
+    whereNotNull(column:string) {
+        this.conditions.push({ column, operator: 'IS NOT NULL', type: this.nextType, isGroup: false });
+        this.nextType = 'AND'; // Reiniciar el tipo después de agregar una condición
         return this;
     }
 
@@ -218,8 +229,8 @@ class TableQuery {
         let query = includeSelect ? this.query : ''; // Si se incluye el SELECT o no
 
         // Añadir JOINs
-        if (this.#joins.length > 0) {
-            query += ` ${this.#joins.join(' ')}`;
+        if (this.joins.length > 0) {
+            query += ` ${this.joins.join(' ')}`;
         }
 
         const whereClauses = this.buildConditions();
@@ -229,22 +240,22 @@ class TableQuery {
         }
 
         // Añadir GROUP BY
-        if (this.#groupBy.length > 0) {
-            query += ` GROUP BY ${this.#groupBy.join(', ')}`;
+        if (this._groupBy.length > 0) {
+            query += ` GROUP BY ${this._groupBy.join(', ')}`;
         }
 
         if (this.limitValue !== null && this.limitValue !== undefined && !Number.isNaN(this.limitValue)) {
             query += ` LIMIT ${this.limitValue}`;
           }
       
-          if (this.pageValue !== null && this.pageValue !== undefined && !Number.isNaN(this.pageValue)) {
+          if (this.limitValue && this.pageValue !== null && this.pageValue !== undefined && !Number.isNaN(this.pageValue)) {
             const offset = (this.pageValue - 1) * this.limitValue;
             query += ` OFFSET ${offset}`;
           }
 
         // Añadir ORDER BY solo si no es una consulta agregada (como COUNT, SUM, etc.)
-        if (this.#orderBy.length > 0 && !this.query.startsWith('SELECT COUNT') && !this.query.startsWith('SELECT SUM') && !this.query.startsWith('SELECT AVG') && !this.query.startsWith('SELECT MAX') && !this.query.startsWith('SELECT MIN')) {
-            const orderByClauses = this.#orderBy
+        if (this._orderBy.length > 0 && !this.query.startsWith('SELECT COUNT') && !this.query.startsWith('SELECT SUM') && !this.query.startsWith('SELECT AVG') && !this.query.startsWith('SELECT MAX') && !this.query.startsWith('SELECT MIN')) {
+            const orderByClauses = this._orderBy
                 .map(order => `${order.column} ${order.direction}`)
                 .join(', ');
             query += ` ORDER BY ${orderByClauses}`;
@@ -267,7 +278,7 @@ class TableQuery {
                   const formattedValue2 = typeof value2 === 'string' ? `'${value2}'` : value2;
                   conditionStr = `${cond.column} BETWEEN ${formattedValue1} AND ${formattedValue2}`;
               } else if (cond.operator === 'IN') {
-                  const values = cond.value.map(val => typeof val === 'string' ? `'${val}'` : val).join(', ');
+                  const values = cond.value.map((val:any) => typeof val === 'string' ? `'${val}'` : val).join(', ');
                   conditionStr = `${cond.column} IN (${values})`;
               } else if (cond.operator === 'IS NULL') {
                   conditionStr = `${cond.column} IS NULL`;
@@ -282,38 +293,38 @@ class TableQuery {
           .join('');
     }
 
-    join(table, column1, operator, column2) {
-        this.#joins.push(`JOIN ${table} ON ${column1} ${operator} ${column2}`);
+    join(table: string, column1:string, operator:string, column2:string) {
+        this.joins.push(`JOIN ${table} ON ${column1} ${operator} ${column2}`);
         return this;
     }
 
-    leftJoin(table, column1, operator, column2) {
-        this.#joins.push(`LEFT JOIN ${table} ON ${column1} ${operator} ${column2}`);
+    leftJoin(table: string, column1: string, operator: string, column2: string) {
+        this.joins.push(`LEFT JOIN ${table} ON ${column1} ${operator} ${column2}`);
         return this;
     }
 
-    rightJoin(table, column1, operator, column2) {
-        this.#joins.push(`RIGHT JOIN ${table} ON ${column1} ${operator} ${column2}`);
+    rightJoin(table: string, column1: string, operator: string, column2: string) {
+        this.joins.push(`RIGHT JOIN ${table} ON ${column1} ${operator} ${column2}`);
         return this;
     }
 
-    orderBy(column, direction = 'ASC') {
+    orderBy(column: string, direction: string = 'ASC') {
       const validDirections = ['ASC', 'DESC'];
       if (validDirections.includes(direction.toUpperCase())) {
-          this.#orderBy.push({ column, direction: direction.toUpperCase() });
+          this._orderBy.push({ column, direction: direction.toUpperCase() });
       } else {
           throw new Error(`Invalid direction: ${direction}. Use 'ASC' or 'DESC'.`);
       }
       return this;
     }
 
-    groupBy(column) {
-        this.#groupBy.push(column);
+    groupBy(column:string) {
+        this._groupBy.push(column);
         return this;
     }
 
     distinct() {
-      this.#distinct = true;
+      this._distinct = true;
       this.query = this.query.replace(/^SELECT /, 'SELECT DISTINCT '); // Cambia SELECT a SELECT DISTINCT si ya se ha establecido DISTINCT
       return this;
     }
@@ -323,32 +334,32 @@ class TableQuery {
         return this;
     }
 
-    sum(column) {
+    sum(column: string) {
         this.query = `SELECT SUM(${column}) AS sum FROM \`${this.tableName}\``;
         return this;
     }
 
-    avg(column) {
+    avg(column:string) {
         this.query = `SELECT AVG(${column}) AS avg FROM \`${this.tableName}\``;
         return this;
     }
 
-    max(column) {
+    max(column:string) {
         this.query = `SELECT MAX(${column}) AS max FROM \`${this.tableName}\``;
         return this;
     }
 
-    min(column) {
+    min(column: string) {
         this.query = `SELECT MIN(${column}) AS min FROM \`${this.tableName}\``;
         return this;
     }
 
-    limit(number) {
+    limit(number:number) {
         this.limitValue = number;
         return this; 
     }
 
-    page(number) {
+    page(number:number) {
         this.pageValue = number;
         return this; 
     }
@@ -366,7 +377,7 @@ class TableQuery {
     async first() {
         const sqlQuery = this.buildQuery();
         try {
-            const result = await this.#get_response(sqlQuery);
+            const result:any = await this.#get_response(sqlQuery);
             return result[0] || null; // Devuelve el primer resultado o null si no hay resultados
         } catch (error) {
             //console.error('Error al obtener el primer resultado.', error);
@@ -374,11 +385,11 @@ class TableQuery {
         }
     }
 
-    async find(value, column = 'id') {
+    async find(value:any, column = 'id') {
         this.where(column, '=', value); // Agregar una condición WHERE
         const sqlQuery = this.buildQuery();
         try {
-            const result = await this.#get_response(sqlQuery);
+            const result:any = await this.#get_response(sqlQuery);
             return result[0] || null; // Devuelve el primer resultado o null si no hay resultados
         } catch (error) {
             //console.error('Error al encontrar el registro.', error);
@@ -386,7 +397,7 @@ class TableQuery {
         }
     }
     
-    async insert(data) {
+    async insert(data:any) {
         // Verifica si data NO es un array
         if (!Array.isArray(data)) {
             throw new Error('El método insert requiere un array de objetos con pares clave-valor.');
@@ -398,7 +409,7 @@ class TableQuery {
         }
     
         try {
-            const results = [];
+            const results: any = [];
     
             for (const row of data) {
                 const keys = Object.keys(row).map(key => `\`${key}\``);
@@ -414,18 +425,18 @@ class TableQuery {
     
                 const sqlQuery = `INSERT INTO \`${this.tableName}\` (${columns}) VALUES (${placeholders})`;
     
-                const result = await this.#get_response(sqlQuery);
+                const result:any = await this.#get_response(sqlQuery);
                 const insertedRow = await this.where('id', '=', result.insertId || 0).first();
                 results.push(insertedRow);
             }
     
             return results;
-        } catch (error) {
+        } catch (error:any) {
             throw new Error('Error al insertar los datos: ' + error.message);
         }
     }
 
-    async update(data) {
+    async update(data:any) {
       if (typeof data !== 'object' || Array.isArray(data)) {
           throw new Error('El método update requiere un objeto con pares clave-valor.');
       }
@@ -470,32 +481,38 @@ class TableQuery {
         }
     }
 
-    async #get_response(sql) {
-        const pool = await this.#conection;
+    async #get_response(sql:string) {
+        const pool = await this.conection;
+        if(!pool){
+            throw new Error('No se ha establecido una conexión a la base de datos.');
+        }
         try {
             const [result] = await pool.query(sql);
             return result;
-        } catch (error) {
+        } catch (error:any) {
             if (error.code === 'ER_BAD_DB_ERROR') {
                 try {
-                    await this.#conection.end();
-                    this.#conection = mysql.createPool({
+                    if(!this.conection){
+                        throw new Error('No se ha establecido una conexión a la base de datos.');
+                    }
+                    await this.conection.end();
+                    this.conection = mysql.createPool({
                         host: MYSQL_HOST,
                         user: MYSQL_USER,
                         password: MYSQL_PASSWORD,
-                        port: MYSQL_PORT,
+                        port: Number(MYSQL_PORT),
                     });
-                    const pool_aux = await this.#conection;
+                    const pool_aux = await this.conection;
                     await pool_aux.query(`CREATE DATABASE \`${MYSQL_DATABASE}\``);
-                    await this.#conection.end();
-                    this.#conection = mysql.createPool({
+                    await this.conection.end();
+                    this.conection = mysql.createPool({
                         host: MYSQL_HOST,
                         user: MYSQL_USER,
                         password: MYSQL_PASSWORD,
                         database: MYSQL_DATABASE,
-                        port: MYSQL_PORT,
+                        port: Number(MYSQL_PORT),
                     });
-                    const pool = await this.#conection;
+                    const pool = await this.conection;
                     const [result] = await pool.query(sql);
                     return result;
                 } catch (error) {
@@ -510,25 +527,26 @@ class TableQuery {
 }
 
 class Columns {
-    #conection;
+    private conection: Pool | null; 
+    private tableName: string; // Nombre de la tabla
 
-    constructor(tableName, conection=null) {
+    constructor(tableName: string, conection: Pool | null = null) {
         this.tableName = tableName;
-        this.#conection = conection; // Inicializar GROUP BY
+        this.conection = conection; // Inicializar GROUP BY
     }
-    async get() {
+    async get(){
         try {
             // Verifica si la tabla ya existe
             const tableExistsQuery = `SHOW TABLES LIKE '${this.tableName}'`;
-            const tableExistsResult = await this.#get_response(tableExistsQuery);
+            const tableExistsResult:any = await this.#get_response(tableExistsQuery);
     
-            if (tableExistsResult.length > 0) {
+            if (tableExistsResult && tableExistsResult.length > 0) {
                 // La tabla existe, obtenemos su estructura actual
                 const existingFieldsQuery = `SHOW COLUMNS FROM \`${this.tableName}\``;
-                const existingFields = await this.#get_response(existingFieldsQuery);
+                const existingFields:any = await this.#get_response(existingFieldsQuery);
     
                 // Mapeamos los campos actuales en un formato más manejable
-                return existingFields.reduce((acc, field) => {
+                return existingFields.reduce((acc:any, field:any) => {
                     acc[field.Field] = {
                         type: field.Type,
                         defaultValue: field.Default,
@@ -545,7 +563,7 @@ class Columns {
         }
     }
     
-    async add(fields) {
+    async add(fields: Field[]) {
         try {
             const currentFields = await this.get();
     
@@ -591,7 +609,7 @@ class Columns {
         }
     }
     
-    async edit(fields) {
+    async edit(fields: Field[]) {
         try {
             const currentFields = await this.get();
     
@@ -647,9 +665,9 @@ class Columns {
         }
     }
 
-    async delete(fields) {
+    async delete(fields: string[]) {
         try {
-            const currentFields = await this.get();
+            const currentFields: any = await this.get();
     
             for (const key of fields) {
                 if (currentFields[key]) {
@@ -666,32 +684,38 @@ class Columns {
         }
     }
 
-    async #get_response(sql) {
-        const pool = await this.#conection;
+    async #get_response(sql:string) {
+        const pool = await this.conection;
+        if(!pool){
+            throw new Error('No se ha establecido una conexión a la base de datos.');
+        }
         try {
             const [result] = await pool.query(sql);
             return result;
-        } catch (error) {
+        } catch (error:any) {
             if (error.code === 'ER_BAD_DB_ERROR') {
                 try {
-                    await this.#conection.end();
-                    this.#conection = mysql.createPool({
+                    if(!this.conection){
+                        throw new Error('No se ha establecido una conexión a la base de datos.');
+                    }
+                    await this.conection.end();
+                    this.conection = mysql.createPool({
                         host: MYSQL_HOST,
                         user: MYSQL_USER,
                         password: MYSQL_PASSWORD,
-                        port: MYSQL_PORT,
+                        port: Number(MYSQL_PORT),
                     });
-                    const pool_aux = await this.#conection;
+                    const pool_aux = await this.conection;
                     await pool_aux.query(`CREATE DATABASE \`${MYSQL_DATABASE}\``);
-                    await this.#conection.end();
-                    this.#conection = mysql.createPool({
+                    await this.conection.end();
+                    this.conection = mysql.createPool({
                         host: MYSQL_HOST,
                         user: MYSQL_USER,
                         password: MYSQL_PASSWORD,
                         database: MYSQL_DATABASE,
-                        port: MYSQL_PORT,
+                        port: Number(MYSQL_PORT),
                     });
-                    const pool = await this.#conection;
+                    const pool = await this.conection;
                     const [result] = await pool.query(sql);
                     return result;
                 } catch (error) {
