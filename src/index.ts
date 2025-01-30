@@ -1,3 +1,3 @@
-import db from './lib/mysql';
+import db from './lib/mysql.js';
 
 export default db;

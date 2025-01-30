@@ -100,13 +100,13 @@ class TableQuery {
     async create(fields: Field[]) {
         try {
             const fieldsDefinition = fields.map(field => {
-                const { key, type, defaultValue, length, options, foreing } = field;
+                const { name, type, defaultValue, length, options, foreing } = field;
     
-                if (!key || !type) {
+                if (!name || !type) {
                     throw new Error('Cada campo debe tener un nombre y un tipo.');
                 }
     
-                let fieldDefinition = (length && type != "text") ? `\`${key}\` ${type}(${length})` : `\`${key}\` ${type}`;
+                let fieldDefinition = (length && type != "text") ? `\`${name}\` ${type}(${length})` : `\`${name}\` ${type}`;
 
                 if(defaultValue){
                     fieldDefinition += (['VARCHAR', 'CHAR', 'TEXT', 'ENUM', 'SET'].includes(type.toUpperCase())) 
@@ -131,7 +131,7 @@ class TableQuery {
     
                 // Si es una llave foránea
                 if (foreing) {
-                    fieldDefinition += `, FOREIGN KEY (\`${key}\`) REFERENCES \`${foreing.table}\`(\`${foreing.column}\`)`;
+                    fieldDefinition += `, FOREIGN KEY (\`${name}\`) REFERENCES \`${foreing.table}\`(\`${foreing.column}\`)`;
                 }
     
                 return fieldDefinition;
@@ -568,12 +568,12 @@ class Columns {
             const currentFields = await this.get();
     
             for (const field of fields) {
-                const { key, type, length, defaultValue, options, foreing } = field;
+                const { name, type, length, defaultValue, options, foreing } = field;
                 const fullType = (length && type !== "TEXT") ? `${type}(${length})` : type;
     
-                if (!currentFields[key]) {
+                if (!currentFields[name]) {
                     // El campo no existe, agregamos una nueva columna
-                    let alterQuery = `ALTER TABLE \`${this.tableName}\` ADD COLUMN \`${key}\` ${fullType}`;
+                    let alterQuery = `ALTER TABLE \`${this.tableName}\` ADD COLUMN \`${name}\` ${fullType}`;
                     
                     if(defaultValue){
                         alterQuery += (['varchar', 'char', 'text', 'enum', 'set'].includes(type)) 
@@ -595,7 +595,7 @@ class Columns {
                         }
                     }
                     if (foreing) {
-                        alterQuery += `, ADD FOREIGN KEY (\`${key}\`) REFERENCES \`${foreing.table}\`(\`${foreing.column}\`)`;
+                        alterQuery += `, ADD FOREIGN KEY (\`${name}\`) REFERENCES \`${foreing.table}\`(\`${foreing.column}\`)`;
                     }
 
                     await this.#get_response(alterQuery);
@@ -614,12 +614,12 @@ class Columns {
             const currentFields = await this.get();
     
             for (const field of fields) {
-                const { key, type, length, defaultValue, options, foreing } = field;
+                const { name, type, length, defaultValue, options, foreing } = field;
                 const fullType = (length && type !== "TEXT") ? `${type}(${length})` : type;
     
-                if (currentFields[key]) {
+                if (currentFields[name]) {
                     // El campo existe, verificamos si tiene diferencias
-                    const existingField = currentFields[key];
+                    const existingField = currentFields[name];
 
                     if (existingField.type !== fullType || existingField.defaultValue !== defaultValue ||
                         (options && options.includes('autoincrement') && existingField.extra !== 'auto_increment') ||
@@ -627,7 +627,7 @@ class Columns {
                         (options && options.includes('primary') && existingField.key !== 'PRI')) { 
 
                         // Modificamos la columna existente
-                        let modifyQuery = `ALTER TABLE \`${this.tableName}\` MODIFY COLUMN \`${key}\` ${fullType}`;
+                        let modifyQuery = `ALTER TABLE \`${this.tableName}\` MODIFY COLUMN \`${name}\` ${fullType}`;
 
                         if(existingField.defaultValue !== defaultValue){
                             modifyQuery += (['varchar', 'char', 'text', 'enum', 'set'].includes(type)) 
@@ -650,7 +650,7 @@ class Columns {
                         }
                         
                         if (foreing) {
-                            modifyQuery += `, ADD FOREIGN KEY (\`${key}\`) REFERENCES \`${foreing.table}\`(\`${foreing.column}\`)`;
+                            modifyQuery += `, ADD FOREIGN KEY (\`${name}\`) REFERENCES \`${foreing.table}\`(\`${foreing.column}\`)`;
                         }
 
                         await this.#get_response(modifyQuery);

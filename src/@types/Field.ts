@@ -1,5 +1,5 @@
 export interface Field {
-    key: string;
+    name: string;
     type: string;
     defaultValue?: string;
     length?: number;
