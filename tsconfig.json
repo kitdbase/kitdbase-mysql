@@ -1,10 +1,10 @@
 {
     "compilerOptions": {
       "target": "ES2020",
-      "module": "ESNext",
+      "module": "NodeNext",
       "declaration": true, // Generar archivos .d.ts
       "outDir": "./dist", // Directorio de salida
-      "moduleResolution": "node",
+      "moduleResolution": "NodeNext",
       "esModuleInterop": true,
       "skipLibCheck": true,
       "strict": true,

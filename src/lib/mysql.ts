@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import mysql, { Pool } from 'mysql2/promise';
-import { Condition, Field, OrderBy } from '../@types/Field';
+import { Condition, Field, OrderBy } from '../@types/Field.js';
 
 dotenv.config();
 
