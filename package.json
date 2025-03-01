@@ -2,16 +2,16 @@
   "name": "kitdbase-mysql",
   "version": "1.0.8",
   "description": "kitdbase-mysql is a lightweight and fluid library for managing MySQL databases in Node.js. It makes it easy to create MySQL queries without losing flexibility.",
-  "main": "dist/index.js",
-  "module": "dist/index.mjs",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
   "type": "module",
   "types": "dist/index.d.ts",
   "exports": {
-    "import": "./dist/index.mjs",
+    "import": "./dist/index.js",
     "require": "./dist/index.cjs"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsup src/index.ts --format esm,cjs --dts --outDir dist --legacyOutput",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
